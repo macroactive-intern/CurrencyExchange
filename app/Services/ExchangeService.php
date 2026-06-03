@@ -11,7 +11,7 @@ use InvalidArgumentException;
 
 class ExchangeService
 {
-    public function exchange(User $user, string $from, string $to, int $amount): array
+    public function exchange(User $user, string $from, string $to, float $amount): array
     {
         $this->validatePair($from, $to);
 
@@ -34,7 +34,7 @@ class ExchangeService
                 throw new InsufficientBalanceException($from, $amount, $fromWallet->balance);
             }
 
-            $toAmount = $this->convert($from, $to, $amount);
+            ['net' => $toAmount, 'fee' => $fee] = $this->breakdown($from, $to, $amount);
 
             $fromWallet->decrement('balance', $amount);
             $toWallet->increment('balance', $toAmount);
@@ -52,6 +52,7 @@ class ExchangeService
                 'to_currency'   => $to,
                 'from_amount'   => $amount,
                 'to_amount'     => $toAmount,
+                'fee'           => $fee,
                 'balances'      => [
                     $from => $fromWallet->fresh()->balance,
                     $to   => $toWallet->fresh()->balance,
@@ -61,7 +62,7 @@ class ExchangeService
     }
 
     /**
-     * Convert $amount of $from into $to, applying the configured rate and fee.
+     * Returns gross, fee, and net for a given exchange.
      *
      * Rate key format: {fromCurrency}_to_{toCurrency}  (e.g. gold_to_gems)
      * Fee is applied to the gross converted amount — not to the source deduction.
@@ -69,12 +70,10 @@ class ExchangeService
      * Example: 100 gold, rate 0.1, fee 2.5%
      *   gross = 100 * 0.1 = 10 gems
      *   fee   = 10 * 0.025 = 0.25 gems
-     *   net   = 10 - 0.25  = 9.75 gems  ← what the user receives
+     *   net   = 10 - 0.25  = 9.75 gems
      */
-    public function convert(string $from, string $to, int $amount): float
+    public function breakdown(string $from, string $to, float $amount): array
     {
-        $this->validatePair($from, $to);
-
         $rateKey = "{$from}_to_{$to}";
         $rate    = config("exchange.rates.{$rateKey}")
             ?? throw new InvalidArgumentException(
@@ -83,9 +82,17 @@ class ExchangeService
 
         $gross      = $amount * $rate;
         $feePercent = config('exchange.fee_percent', 0);
-        $net        = $gross * (1 - $feePercent / 100);
+        $fee        = $gross * ($feePercent / 100);
+        $net        = $gross - $fee;
 
-        return $net;
+        return ['gross' => $gross, 'fee' => $fee, 'net' => $net];
+    }
+
+    public function convert(string $from, string $to, float $amount): float
+    {
+        $this->validatePair($from, $to);
+
+        return $this->breakdown($from, $to, $amount)['net'];
     }
 
     private function validatePair(string $from, string $to): void
