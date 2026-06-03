@@ -14,7 +14,7 @@ class ExchangeController extends Controller
 {
     public function __construct(private ExchangeService $service) {}
 
-    public function exchange(Request $request): JsonResponse
+    public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'from'   => ['required', 'string', Rule::in(['gold', 'gems'])],
