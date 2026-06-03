@@ -1,5 +1,11 @@
 <?php
 
+// Config under test:  gold_to_gems = 0.1,  gems_to_gold = 8.0,  fee_percent = 2.5
+// Net multiplier   :  1 - 2.5/100 = 0.975
+//
+// gold → gems:  amount * 0.1  * 0.975  (e.g. 10 gold → 0.975 gems)
+// gems → gold:  amount * 8.0  * 0.975  (e.g. 30 gems → 234 gold)
+
 use App\Models\ExchangeLog;
 use App\Models\User;
 use App\Models\Wallet;
@@ -70,7 +76,8 @@ it('rejects a negative amount', function () {
 
 // ── happy paths ───────────────────────────────────────────────────────────────
 
-it('exchanges gold for gems at 1:10 rate', function () {
+it('exchanges gold for gems applying rate 0.1 and 2.5% fee on the credited amount', function () {
+    // 10 gold → gross 1.0 gem → fee 0.025 → net 0.975 gems
     $user = userWithWallets(gold: 50, gems: 0);
 
     $response = $this->actingAs($user, 'sanctum')
@@ -81,12 +88,13 @@ it('exchanges gold for gems at 1:10 rate', function () {
             'from_currency' => 'gold',
             'to_currency'   => 'gems',
             'from_amount'   => 10,
-            'to_amount'     => 100,
-            'balances'      => ['gold' => 40, 'gems' => 100],
+            'to_amount'     => 0.975,
+            'balances'      => ['gold' => 40, 'gems' => 0.975],
         ]);
 });
 
-it('exchanges gems for gold at 10:1 rate', function () {
+it('exchanges gems for gold applying rate 8.0 and 2.5% fee on the credited amount', function () {
+    // 30 gems → gross 240 gold → fee 6 → net 234 gold
     $user = userWithWallets(gold: 0, gems: 50);
 
     $response = $this->actingAs($user, 'sanctum')
@@ -97,12 +105,24 @@ it('exchanges gems for gold at 10:1 rate', function () {
             'from_currency' => 'gems',
             'to_currency'   => 'gold',
             'from_amount'   => 30,
-            'to_amount'     => 3,
-            'balances'      => ['gems' => 20, 'gold' => 3],
+            'to_amount'     => 234.0,
+            'balances'      => ['gems' => 20, 'gold' => 234.0],
         ]);
 });
 
+it('credits the exact example from the spec: 100 gold → 9.75 gems', function () {
+    // Deduct 100 gold  · rate 0.1 · gross 10 gems · fee 0.25 · net 9.75 gems
+    $user = userWithWallets(gold: 100, gems: 0);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson('/api/exchange', ['from' => 'gold', 'to' => 'gems', 'amount' => 100]);
+
+    $response->assertOk()
+        ->assertJson(['to_amount' => 9.75, 'balances' => ['gold' => 0, 'gems' => 9.75]]);
+});
+
 it('writes an exchange log entry on success', function () {
+    // 5 gold → gross 0.5 gems → net 0.4875 gems
     $user = userWithWallets(gold: 100, gems: 0);
 
     $this->actingAs($user, 'sanctum')
@@ -114,7 +134,7 @@ it('writes an exchange log entry on success', function () {
         'from_currency' => 'gold',
         'to_currency'   => 'gems',
         'from_amount'   => 5,
-        'to_amount'     => 50,
+        'to_amount'     => 0.4875,
     ]);
 });
 
@@ -136,7 +156,7 @@ it('does not deduct balance when the exchange fails', function () {
         ->postJson('/api/exchange', ['from' => 'gold', 'to' => 'gems', 'amount' => 10])
         ->assertUnprocessable();
 
-    // Gold must be unchanged — no partial transfer
+    // Both wallets must be unchanged — no partial transfer
     $this->assertDatabaseHas('wallets', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 5]);
     $this->assertDatabaseHas('wallets', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 0]);
 });
@@ -151,19 +171,11 @@ it('does not log an exchange when the balance check fails', function () {
     expect(ExchangeLog::where('user_id', $user->id)->count())->toBe(0);
 });
 
-it('returns 422 when gems-to-gold amount is too small to yield 1 gold', function () {
-    $user = userWithWallets(gold: 0, gems: 9);
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', ['from' => 'gems', 'to' => 'gold', 'amount' => 9])
-        ->assertUnprocessable();
-
-    $this->assertDatabaseHas('wallets', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 9]);
-});
-
 // ── sequential exchange drains balance correctly ──────────────────────────────
 
-it('two sequential exchanges drain the balance correctly with no double-spend', function () {
+it('two sequential exchanges accumulate the credited balance correctly', function () {
+    // Exchange 1: 10 gold → 0.975 gems  |  Exchange 2: 10 gold → 0.975 gems
+    // Total: gold = 0, gems = 1.95
     $user = userWithWallets(gold: 20, gems: 0);
 
     $this->actingAs($user, 'sanctum')
@@ -175,7 +187,7 @@ it('two sequential exchanges drain the balance correctly with no double-spend', 
         ->assertOk();
 
     $this->assertDatabaseHas('wallets', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 0]);
-    $this->assertDatabaseHas('wallets', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 200]);
+    $this->assertDatabaseHas('wallets', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 1.95]);
 });
 
 it('a third exchange on an empty wallet is rejected, not silently ignored', function () {

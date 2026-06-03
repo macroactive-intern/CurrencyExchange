@@ -4,6 +4,9 @@
 // They do NOT use RefreshDatabase. Each test commits its own setup rows so that
 // the spawned artisan processes (separate PHP processes) can read them.
 // Run with: php artisan test tests/Concurrency --env=testing
+//
+// Net rate (gold→gems): 0.1 * (1 - 0.025) = 0.0975
+// Net rate (gems→gold): 8.0 * (1 - 0.025) = 7.8
 
 use App\Models\User;
 use App\Models\Wallet;
@@ -79,35 +82,36 @@ function spawnExchanges(int $userId, string $from, string $to, int $amount, int 
 it('handles 10 concurrent gold→gems exchanges and never goes negative', function () {
     // User starts with 100 gold. 10 processes each try to exchange 20 gold.
     // Only 5 can succeed (100 / 20 = 5). The other 5 must fail cleanly.
+    // Conservation: gems_earned = gold_deducted * 0.0975  (rate 0.1 * net multiplier 0.975)
     $user = createCommittedUser(gold: 100, gems: 0);
 
     spawnExchanges($user->id, 'gold', 'gems', 20, 10);
 
-    $goldBalance = Wallet::where('user_id', $user->id)->where('currency', 'gold')->value('balance');
-    $gemsBalance = Wallet::where('user_id', $user->id)->where('currency', 'gems')->value('balance');
+    $goldBalance = (float) Wallet::where('user_id', $user->id)->where('currency', 'gold')->value('balance');
+    $gemsBalance = (float) Wallet::where('user_id', $user->id)->where('currency', 'gems')->value('balance');
 
-    // Balance must never go negative and every deducted gold must equal gained gems / 10
-    expect($goldBalance)->toBeGreaterThanOrEqual(0);
-    expect($gemsBalance)->toBeGreaterThanOrEqual(0);
+    expect($goldBalance)->toBeGreaterThanOrEqual(0.0);
+    expect($gemsBalance)->toBeGreaterThanOrEqual(0.0);
 
-    // Each successful exchange: 20 gold → 200 gems, so gold + gems/10 must equal 100
-    expect($goldBalance + intdiv($gemsBalance, 10))->toBe(100);
+    // Every deducted gold unit must have produced exactly 0.0975 gems (rate * net multiplier)
+    $goldDeducted = 100.0 - $goldBalance;
+    expect(round($gemsBalance, 6))->toBe(round($goldDeducted * 0.0975, 6));
 
     cleanUpUser($user);
 });
 
 it('all 5 concurrent exchanges succeed when balance is exactly enough', function () {
     // User starts with 100 gold. 5 processes each exchange 20 gold.
-    // All 5 must succeed — total 100 gold consumed, 1000 gems earned.
+    // All 5 must succeed — total 100 gold consumed, 9.75 gems earned (100 * 0.0975).
     $user = createCommittedUser(gold: 100, gems: 0);
 
     $exitCodes = spawnExchanges($user->id, 'gold', 'gems', 20, 5);
 
-    $goldBalance = Wallet::where('user_id', $user->id)->where('currency', 'gold')->value('balance');
-    $gemsBalance = Wallet::where('user_id', $user->id)->where('currency', 'gems')->value('balance');
+    $goldBalance = (float) Wallet::where('user_id', $user->id)->where('currency', 'gold')->value('balance');
+    $gemsBalance = (float) Wallet::where('user_id', $user->id)->where('currency', 'gems')->value('balance');
 
-    expect($goldBalance)->toBe(0);
-    expect($gemsBalance)->toBe(1000);
+    expect($goldBalance)->toBe(0.0);
+    expect(round($gemsBalance, 6))->toBe(9.75);  // 100 * 0.0975
     expect(collect($exitCodes)->filter(fn ($c) => $c === 0)->count())->toBe(5);
 
     cleanUpUser($user);
@@ -115,9 +119,9 @@ it('all 5 concurrent exchanges succeed when balance is exactly enough', function
 
 it('locks in consistent order so opposite-direction exchanges do not deadlock', function () {
     // Two users simultaneously exchange in opposite directions (gold→gems and gems→gold).
-    // This would deadlock without consistent lock ordering.
+    // This would deadlock without consistent lock ordering (gems locked before gold always).
     $userA = createCommittedUser(gold: 50, gems: 0);
-    $userB = createCommittedUser(gold: 0, gems: 500);
+    $userB = createCommittedUser(gold: 0, gems: 50);
 
     $php     = PHP_BINARY;
     $artisan = base_path('artisan');
@@ -132,7 +136,7 @@ it('locks in consistent order so opposite-direction exchanges do not deadlock', 
             $pipesA[$i]
         );
         $procsB[] = proc_open(
-            "{$php} {$artisan} exchange:run {$userB->id} gems gold 50 --env=testing",
+            "{$php} {$artisan} exchange:run {$userB->id} gems gold 10 --env=testing",
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipesB[$i]
         );
@@ -142,19 +146,23 @@ it('locks in consistent order so opposite-direction exchanges do not deadlock', 
         proc_close($proc);
     }
 
-    // Both users' balances must be internally consistent — no negative balances
-    $goldA = Wallet::where('user_id', $userA->id)->where('currency', 'gold')->value('balance');
-    $gemsA = Wallet::where('user_id', $userA->id)->where('currency', 'gems')->value('balance');
-    $goldB = Wallet::where('user_id', $userB->id)->where('currency', 'gold')->value('balance');
-    $gemsB = Wallet::where('user_id', $userB->id)->where('currency', 'gems')->value('balance');
+    $goldA = (float) Wallet::where('user_id', $userA->id)->where('currency', 'gold')->value('balance');
+    $gemsA = (float) Wallet::where('user_id', $userA->id)->where('currency', 'gems')->value('balance');
+    $goldB = (float) Wallet::where('user_id', $userB->id)->where('currency', 'gold')->value('balance');
+    $gemsB = (float) Wallet::where('user_id', $userB->id)->where('currency', 'gems')->value('balance');
 
-    expect($goldA)->toBeGreaterThanOrEqual(0);
-    expect($gemsA)->toBeGreaterThanOrEqual(0);
-    expect($goldB)->toBeGreaterThanOrEqual(0);
-    expect($gemsB)->toBeGreaterThanOrEqual(0);
+    expect($goldA)->toBeGreaterThanOrEqual(0.0);
+    expect($gemsA)->toBeGreaterThanOrEqual(0.0);
+    expect($goldB)->toBeGreaterThanOrEqual(0.0);
+    expect($gemsB)->toBeGreaterThanOrEqual(0.0);
 
-    // Conservation: original 50 gold for A must equal goldA + gemsA/10
-    expect($goldA + intdiv($gemsA, 10))->toBe(50);
+    // Conservation for A: gold_deducted * 0.0975 = gems_earned
+    $goldDeductedA = 50.0 - $goldA;
+    expect(round($gemsA, 6))->toBe(round($goldDeductedA * 0.0975, 6));
+
+    // Conservation for B: gems_deducted * 7.8 = gold_earned
+    $gemsDeductedB = 50.0 - $gemsB;
+    expect(round($goldB, 6))->toBe(round($gemsDeductedB * 7.8, 6));
 
     cleanUpUser($userA);
     cleanUpUser($userB);

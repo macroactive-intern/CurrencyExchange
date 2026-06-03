@@ -14,6 +14,8 @@ class Wallet extends Model
 
     protected $fillable = ['user_id', 'currency', 'balance'];
 
+    protected $casts = ['balance' => 'float'];
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

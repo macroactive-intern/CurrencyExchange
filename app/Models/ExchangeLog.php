@@ -15,6 +15,8 @@ class ExchangeLog extends Model
         'to_amount',
     ];
 
+    protected $casts = ['to_amount' => 'float'];
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

@@ -13,8 +13,8 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->enum('from_currency', ['gold', 'gems']);
             $table->enum('to_currency', ['gold', 'gems']);
-            $table->unsignedBigInteger('from_amount');
-            $table->unsignedBigInteger('to_amount');
+            $table->unsignedBigInteger('from_amount');  // source deduction is always a whole number
+            $table->decimal('to_amount', 20, 8);         // credited amount is fractional after rate+fee
             $table->timestamps();
         });
     }

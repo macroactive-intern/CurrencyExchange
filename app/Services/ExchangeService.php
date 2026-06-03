@@ -11,12 +11,6 @@ use InvalidArgumentException;
 
 class ExchangeService
 {
-    // Conversion: 1 gold = 10 gems, 10 gems = 1 gold (integer division, remainder discarded)
-    private const RATES = [
-        'gold:gems' => 10,
-        'gems:gold' => 0,   // handled via intdiv below
-    ];
-
     public function exchange(User $user, string $from, string $to, int $amount): array
     {
         $this->validatePair($from, $to);
@@ -42,12 +36,6 @@ class ExchangeService
 
             $toAmount = $this->convert($from, $to, $amount);
 
-            if ($toAmount === 0) {
-                throw new InvalidArgumentException(
-                    "Amount too small: {$amount} {$from} yields 0 {$to}."
-                );
-            }
-
             $fromWallet->decrement('balance', $amount);
             $toWallet->increment('balance', $toAmount);
 
@@ -72,22 +60,45 @@ class ExchangeService
         });
     }
 
-    public function convert(string $from, string $to, int $amount): int
+    /**
+     * Convert $amount of $from into $to, applying the configured rate and fee.
+     *
+     * Rate key format: {fromCurrency}_to_{toCurrency}  (e.g. gold_to_gems)
+     * Fee is applied to the gross converted amount — not to the source deduction.
+     *
+     * Example: 100 gold, rate 0.1, fee 2.5%
+     *   gross = 100 * 0.1 = 10 gems
+     *   fee   = 10 * 0.025 = 0.25 gems
+     *   net   = 10 - 0.25  = 9.75 gems  ← what the user receives
+     */
+    public function convert(string $from, string $to, int $amount): float
     {
         $this->validatePair($from, $to);
 
-        return match ("{$from}:{$to}") {
-            'gold:gems' => $amount * 10,
-            'gems:gold' => intdiv($amount, 10),
-        };
+        $rateKey = "{$from}_to_{$to}";
+        $rate    = config("exchange.rates.{$rateKey}")
+            ?? throw new InvalidArgumentException(
+                "No exchange rate configured for {$from} → {$to}."
+            );
+
+        $gross      = $amount * $rate;
+        $feePercent = config('exchange.fee_percent', 0);
+        $net        = $gross * (1 - $feePercent / 100);
+
+        return $net;
     }
 
     private function validatePair(string $from, string $to): void
     {
-        $valid = ['gold', 'gems'];
+        $valid = array_unique(
+            array_merge(
+                array_map(fn ($key) => explode('_to_', $key)[0], array_keys(config('exchange.rates', []))),
+                array_map(fn ($key) => explode('_to_', $key)[1], array_keys(config('exchange.rates', [])))
+            )
+        );
 
         if (! in_array($from, $valid, true) || ! in_array($to, $valid, true)) {
-            throw new InvalidArgumentException("Unknown currency. Allowed: gold, gems.");
+            throw new InvalidArgumentException("Unknown currency. Allowed: " . implode(', ', $valid) . ".");
         }
 
         if ($from === $to) {

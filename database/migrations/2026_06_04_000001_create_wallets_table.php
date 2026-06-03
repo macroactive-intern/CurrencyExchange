@@ -12,7 +12,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->enum('currency', ['gold', 'gems']);
-            $table->unsignedBigInteger('balance')->default(0);
+            $table->decimal('balance', 20, 8)->default(0);
             $table->timestamps();
 
             $table->unique(['user_id', 'currency']);
