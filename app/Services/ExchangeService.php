@@ -2,63 +2,62 @@
 
 namespace App\Services;
 
-use App\Exceptions\InsufficientBalanceException;
-use App\Models\ExchangeLog;
+use App\Models\CurrencyBalance;
+use App\Models\ExchangeTransaction;
 use App\Models\User;
-use App\Models\Wallet;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
 class ExchangeService
 {
-    public function exchange(User $user, string $from, string $to, float $amount): array
+    public function exchange(User $user, string $fromCurrency, string $toCurrency, float $amount): array
     {
-        $this->validatePair($from, $to);
+        $this->validatePair($fromCurrency, $toCurrency);
 
-        return DB::transaction(function () use ($user, $from, $to, $amount) {
-            // Acquire locks in consistent alphabetical order (gems < gold) to prevent deadlocks.
-            // Every transaction locks the same two rows in the same order, so no circular wait is possible.
-            $wallets = Wallet::where('user_id', $user->id)
-                ->whereIn('currency', [$from, $to])
-                ->orderBy('currency')   // 'gems' before 'gold' — deterministic, deadlock-safe
+        return DB::transaction(function () use ($user, $fromCurrency, $toCurrency, $amount) {
+            $balances = CurrencyBalance::where('user_id', $user->id)
+                ->whereIn('currency', [$fromCurrency, $toCurrency])
+                ->orderBy('currency')
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('currency');
 
-            $fromWallet = $wallets[$from]
-                ?? throw new InvalidArgumentException("Wallet for {$from} not found.");
-            $toWallet = $wallets[$to]
-                ?? throw new InvalidArgumentException("Wallet for {$to} not found.");
+            $fromBalance = $balances[$fromCurrency]
+                ?? throw new InvalidArgumentException("Balance for {$fromCurrency} not found.");
+            $toBalance = $balances[$toCurrency]
+                ?? throw new InvalidArgumentException("Balance for {$toCurrency} not found.");
 
-            if ($fromWallet->balance < $amount) {
-                throw new InsufficientBalanceException($from, $amount, $fromWallet->balance);
+            if ($fromBalance->balance < $amount) {
+                throw ValidationException::withMessages([
+                    'amount' => ['Insufficient balance.'],
+                ]);
             }
 
-            ['net' => $toAmount, 'fee' => $fee] = $this->breakdown($from, $to, $amount);
+            ['net' => $net, 'fee' => $rawFee] = $this->breakdown($fromCurrency, $toCurrency, $amount);
 
-            $fromWallet->decrement('balance', $amount);
-            $toWallet->increment('balance', $toAmount);
+            $credited = round($net, 2);
+            $fee      = round($rawFee, 2);
 
-            ExchangeLog::create([
+            $fromBalance->decrement('balance', $amount);
+            $toBalance->increment('balance', $credited);
+
+            ExchangeTransaction::create([
                 'user_id'       => $user->id,
-                'from_currency' => $from,
-                'to_currency'   => $to,
+                'from_currency' => $fromCurrency,
+                'to_currency'   => $toCurrency,
                 'from_amount'   => $amount,
-                'to_amount'     => $toAmount,
+                'to_amount'     => $credited,
+                'fee_amount'    => $fee,
+                'rate'          => config("exchange.rates.{$fromCurrency}_to_{$toCurrency}"),
             ]);
 
             return [
-                'from_currency' => $from,
-                'to_currency'   => $to,
-                'from_amount'   => $amount,
-                'to_amount'     => $toAmount,
-                'fee'           => $fee,
-                'balances'      => [
-                    $from => $fromWallet->fresh()->balance,
-                    $to   => $toWallet->fresh()->balance,
-                ],
+                'deducted' => $amount,
+                'credited' => $credited,
+                'fee'      => $fee,
             ];
-        });
+        }, attempts: 3);
     }
 
     /**

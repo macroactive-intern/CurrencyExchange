@@ -2,10 +2,10 @@
 
 namespace App\Console\Commands;
 
-use App\Exceptions\InsufficientBalanceException;
 use App\Models\User;
 use App\Services\ExchangeService;
 use Illuminate\Console\Command;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
 class ExchangeRun extends Command
@@ -22,13 +22,13 @@ class ExchangeRun extends Command
                 $user,
                 $this->argument('from'),
                 $this->argument('to'),
-                (int) $this->argument('amount')
+                (float) $this->argument('amount')
             );
 
             $this->line('ok');
 
             return Command::SUCCESS;
-        } catch (InsufficientBalanceException|InvalidArgumentException $e) {
+        } catch (ValidationException|InvalidArgumentException $e) {
             $this->line('fail: ' . $e->getMessage());
 
             return Command::FAILURE;
