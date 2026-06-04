@@ -96,6 +96,11 @@ it('50 concurrent exchanges all succeed when balance is sufficient', function ()
     expect($gemsBalance->balance)->toBeGreaterThanOrEqual(0);
     expect(ExchangeTransaction::where('user_id', $user->id)->count())->toBe(50);
 
+    $txns = ExchangeTransaction::where('user_id', $user->id);
+    expect(round((float) $txns->sum('from_amount'), 2))->toBe(500.00);
+    expect(round((float) $txns->sum('to_amount'),   2))->toBe(48.50);
+    expect(round((float) $txns->sum('fee_amount'),  2))->toBe(1.50);
+
     cleanupConcurrentUser($user);
 });
 
@@ -117,6 +122,11 @@ it('only 10 of 50 concurrent exchanges succeed — proves no double-spend', func
     expect($goldBalance->balance)->toBeGreaterThanOrEqual(0);
     expect($gemsBalance->balance)->toBeGreaterThanOrEqual(0);
     expect(ExchangeTransaction::where('user_id', $user->id)->count())->toBe(10);
+
+    $txns = ExchangeTransaction::where('user_id', $user->id);
+    expect(round((float) $txns->sum('from_amount'), 2))->toBe(100.00);
+    expect(round((float) $txns->sum('to_amount'),   2))->toBe(9.70);
+    expect(round((float) $txns->sum('fee_amount'),  2))->toBe(0.30);
 
     cleanupConcurrentUser($user);
 });
