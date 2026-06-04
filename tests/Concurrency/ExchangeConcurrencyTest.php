@@ -5,9 +5,9 @@
 // the spawned artisan processes (separate PHP processes) can read them.
 // Run with: php artisan test tests/Concurrency --env=testing
 //
-// Net rate (gold→gems): round(0.1 * 0.975 * amount, 2) per exchange
-//   20 gold → 1.95 gems (rate 0.0975 holds exactly for 20-gold chunks)
-//   10 gold → 0.98 gems (round(0.975,2)=0.98, effective rate 0.098)
+// Net rate (gold→gems): round(round(amount*0.1,2) - round(gross*0.025,2), 2) per exchange
+//   20 gold → 1.95 gems (gross=2.00, fee=0.05, net=1.95; effective rate 0.0975)
+//   10 gold → 0.97 gems (gross=1.00, fee=0.03, net=0.97; effective rate 0.097)
 // Net rate (gems→gold): round(8.0 * 0.975 * amount, 2) per exchange
 //   10 gems → 78 gold (rate 7.8 holds exactly)
 
@@ -159,10 +159,10 @@ it('locks in consistent order so opposite-direction exchanges do not deadlock', 
     expect($goldB)->toBeGreaterThanOrEqual(0.0);
     expect($gemsB)->toBeGreaterThanOrEqual(0.0);
 
-    // Conservation for A: each 10-gold exchange credits round(0.975,2)=0.98 gems
+    // Conservation for A: each 10-gold exchange credits round(1.00-0.03,2)=0.97 gems
     $goldDeductedA = 50.0 - $goldA;
     $successesA = (int) round($goldDeductedA / 10);
-    expect(round($gemsA, 6))->toBe(round($successesA * 0.98, 6));
+    expect(round($gemsA, 6))->toBe(round($successesA * 0.97, 6));
 
     // Conservation for B: each 10-gem exchange credits round(78,2)=78 gold
     $gemsDeductedB = 50.0 - $gemsB;

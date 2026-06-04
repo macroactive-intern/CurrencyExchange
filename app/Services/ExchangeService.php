@@ -15,6 +15,8 @@ class ExchangeService
     {
         $this->validatePair($fromCurrency, $toCurrency);
 
+        $amount = round($amount, 2);
+
         return DB::transaction(function () use ($user, $fromCurrency, $toCurrency, $amount) {
             $balances = CurrencyBalance::where('user_id', $user->id)
                 ->whereIn('currency', [$fromCurrency, $toCurrency])
@@ -34,10 +36,7 @@ class ExchangeService
                 ]);
             }
 
-            ['net' => $net, 'fee' => $rawFee] = $this->breakdown($fromCurrency, $toCurrency, $amount);
-
-            $credited = round($net, 2);
-            $fee      = round($rawFee, 2);
+            ['net' => $credited, 'fee' => $fee] = $this->breakdown($fromCurrency, $toCurrency, $amount);
 
             $fromBalance->decrement('balance', $amount);
             $toBalance->increment('balance', $credited);
@@ -67,9 +66,9 @@ class ExchangeService
      * Fee is applied to the gross converted amount — not to the source deduction.
      *
      * Example: 100 gold, rate 0.1, fee 2.5%
-     *   gross = 100 * 0.1 = 10 gems
-     *   fee   = 10 * 0.025 = 0.25 gems
-     *   net   = 10 - 0.25  = 9.75 gems
+     *   gross = round(100 * 0.1, 2) = 10.00
+     *   fee   = round(10.00 * 0.025, 2) = 0.25
+     *   net   = round(10.00 - 0.25, 2)  = 9.75
      */
     public function breakdown(string $from, string $to, float $amount): array
     {
@@ -79,10 +78,11 @@ class ExchangeService
                 "No exchange rate configured for {$from} → {$to}."
             );
 
-        $gross      = $amount * $rate;
+        $amount     = round($amount, 2);
+        $gross      = round($amount * $rate, 2);
         $feePercent = config('exchange.fee_percent', 0);
-        $fee        = $gross * ($feePercent / 100);
-        $net        = $gross - $fee;
+        $fee        = round($gross * ($feePercent / 100), 2);
+        $net        = round($gross - $fee, 2);
 
         return ['gross' => $gross, 'fee' => $fee, 'net' => $net];
     }

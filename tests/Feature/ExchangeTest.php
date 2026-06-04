@@ -102,7 +102,7 @@ it('rejects a negative amount', function () {
 // ── happy paths ───────────────────────────────────────────────────────────────
 
 it('exchanges gold for gems and returns deducted, credited, fee', function () {
-    // 10 gold → gross 1.0 gem → fee round(0.025,2)=0.03 → credited round(0.975,2)=0.98
+    // 10 gold → gross round(1.0,2)=1.00 → fee round(1.00*0.025,2)=0.03 → credited round(1.00-0.03,2)=0.97
     $user = userWithWallets(gold: 50, gems: 0);
 
     $this->actingAs($user, 'sanctum')
@@ -114,7 +114,7 @@ it('exchanges gold for gems and returns deducted, credited, fee', function () {
         ->assertOk()
         ->assertJson([
             'deducted' => 10,
-            'credited' => 0.98,
+            'credited' => 0.97,
             'fee'      => 0.03,
         ]);
 });
@@ -222,8 +222,8 @@ it('does not log an exchange when the balance check fails', function () {
 // ── sequential exchange drains balance correctly ──────────────────────────────
 
 it('two sequential exchanges accumulate the credited balance correctly', function () {
-    // Exchange 1: 10 gold → 0.98 gems  |  Exchange 2: 10 gold → 0.98 gems
-    // Total: gold = 0, gems = 1.96
+    // Exchange 1: 10 gold → 0.97 gems  |  Exchange 2: 10 gold → 0.97 gems
+    // Total: gold = 0, gems = 1.94
     $user = userWithWallets(gold: 20, gems: 0);
 
     $this->actingAs($user, 'sanctum')
@@ -235,7 +235,7 @@ it('two sequential exchanges accumulate the credited balance correctly', functio
         ->assertOk();
 
     $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 0]);
-    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 1.96]);
+    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 1.94]);
 });
 
 it('a third exchange on an empty wallet is rejected, not silently ignored', function () {
