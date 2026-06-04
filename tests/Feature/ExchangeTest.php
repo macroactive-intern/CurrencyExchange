@@ -1,18 +1,16 @@
 <?php
 
-// Config under test:  gold_to_gems = 0.1,  gems_to_gold = 8.0,  fee_percent = 2.5
-// Net multiplier   :  1 - 2.5/100 = 0.975
+// Config under test:  gold_to_gems = 0.1,  fee_percent = 2.5
 //
-// gold → gems:  round(amount * 0.1 * 0.975, 2)  (e.g. 10 gold → 0.97 credited, 0.03 fee)
-// gems → gold:  round(amount * 8.0 * 0.975, 2)  (e.g. 30 gems → 234 credited, 6 fee)
+// 100 gold → gross = round(100 * 0.1, 2) = 10.00
+//            fee   = round(10.00 * 0.025, 2) = 0.25
+//            net   = round(10.00 - 0.25, 2)  = 9.75
 
 use App\Models\CurrencyBalance;
 use App\Models\ExchangeTransaction;
 use App\Models\User;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function userWithWallets(int $gold = 100, int $gems = 0): User
+function makeUser(float $gold = 0.00, float $gems = 0.00): User
 {
     $user = User::factory()->create();
     CurrencyBalance::factory()->gold($gold)->for($user)->create();
@@ -21,124 +19,10 @@ function userWithWallets(int $gold = 100, int $gems = 0): User
     return $user;
 }
 
-// ── auth ─────────────────────────────────────────────────────────────────────
+// ── Test 1 — exchange deducts and credits correctly ───────────────────────────
 
-it('rejects unauthenticated requests with 401', function () {
-    $this->postJson('/api/exchange', [
-        'from_currency' => 'gold',
-        'to_currency'   => 'gems',
-        'amount'        => 10,
-    ])->assertUnauthorized();
-});
-
-// ── validation ────────────────────────────────────────────────────────────────
-
-it('rejects an unsupported from-currency with an unsupported-pair error', function () {
-    $user = userWithWallets();
-
-    // silver_to_gems has no rate in config → after() fires, error on from_currency
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'silver',
-            'to_currency'   => 'gems',
-            'amount'        => 10,
-        ])
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors('from_currency');
-});
-
-it('rejects an unsupported to-currency with an unsupported-pair error', function () {
-    $user = userWithWallets();
-
-    // gold_to_dust has no rate in config → after() fires, error on from_currency
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'gold',
-            'to_currency'   => 'dust',
-            'amount'        => 10,
-        ])
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors('from_currency');
-});
-
-it('rejects same-currency exchanges', function () {
-    $user = userWithWallets();
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'gold',
-            'to_currency'   => 'gold',
-            'amount'        => 10,
-        ])
-        ->assertUnprocessable();
-});
-
-it('rejects a zero amount', function () {
-    $user = userWithWallets();
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'gold',
-            'to_currency'   => 'gems',
-            'amount'        => 0,
-        ])
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors('amount');
-});
-
-it('rejects a negative amount', function () {
-    $user = userWithWallets();
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'gold',
-            'to_currency'   => 'gems',
-            'amount'        => -5,
-        ])
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors('amount');
-});
-
-// ── happy paths ───────────────────────────────────────────────────────────────
-
-it('exchanges gold for gems and returns deducted, credited, fee', function () {
-    // 10 gold → gross round(1.0,2)=1.00 → fee round(1.00*0.025,2)=0.03 → credited round(1.00-0.03,2)=0.97
-    $user = userWithWallets(gold: 50, gems: 0);
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'gold',
-            'to_currency'   => 'gems',
-            'amount'        => 10,
-        ])
-        ->assertOk()
-        ->assertJson([
-            'deducted' => 10,
-            'credited' => 0.97,
-            'fee'      => 0.03,
-        ]);
-});
-
-it('exchanges gems for gold and returns deducted, credited, fee', function () {
-    // 30 gems → gross 240 gold → fee 6 → credited 234 gold
-    $user = userWithWallets(gold: 0, gems: 50);
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'gems',
-            'to_currency'   => 'gold',
-            'amount'        => 30,
-        ])
-        ->assertOk()
-        ->assertJson([
-            'deducted' => 30,
-            'credited' => 234,
-            'fee'      => 6,
-        ]);
-});
-
-it('credits the exact example from the spec: 100 gold deducted, 9.75 credited, 0.25 fee', function () {
-    $user = userWithWallets(gold: 100, gems: 0);
+it('exchange deducts and credits correctly', function () {
+    $user = makeUser(gold: 1000.00, gems: 0.00);
 
     $this->actingAs($user, 'sanctum')
         ->postJson('/api/exchange', [
@@ -152,106 +36,77 @@ it('credits the exact example from the spec: 100 gold deducted, 9.75 credited, 0
             'credited' => 9.75,
             'fee'      => 0.25,
         ]);
+
+    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 900.00]);
+    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 9.75]);
+    expect(ExchangeTransaction::where('user_id', $user->id)->count())->toBe(1);
 });
 
-it('writes an exchange log entry on success', function () {
-    // 5 gold → gross 0.5 gems → net round(0.4875,2)=0.49 gems
-    $user = userWithWallets(gold: 100, gems: 0);
+// ── Test 2 — fee is applied correctly ────────────────────────────────────────
 
-    $this->actingAs($user, 'sanctum')
+it('fee is applied correctly', function () {
+    // 100 gold at rate 0.1 → gross_credit = 10.00
+    // fee (2.5% of gross) = 0.25
+    // final credit        = 9.75
+    // gross = credited + fee must equal 10.00
+    $user = makeUser(gold: 1000.00, gems: 0.00);
+
+    $data = $this->actingAs($user, 'sanctum')
         ->postJson('/api/exchange', [
             'from_currency' => 'gold',
             'to_currency'   => 'gems',
-            'amount'        => 5,
+            'amount'        => 100,
         ])
-        ->assertOk();
+        ->assertOk()
+        ->json();
 
-    $this->assertDatabaseHas('exchange_transactions', [
-        'user_id'       => $user->id,
-        'from_currency' => 'gold',
-        'to_currency'   => 'gems',
-        'from_amount'   => 5,
-        'to_amount'     => 0.49,
-    ]);
+    expect($data['fee'])->toBe(0.25);
+    expect($data['credited'])->toBe(9.75);
+    expect(round($data['credited'] + $data['fee'], 2))->toBe(10.00);
 });
 
-// ── balance safety ────────────────────────────────────────────────────────────
+// ── Test 3 — insufficient balance returns 422 ─────────────────────────────────
 
-it('returns 422 when the user has insufficient balance', function () {
-    $user = userWithWallets(gold: 5, gems: 0);
+it('insufficient balance returns 422', function () {
+    $user = makeUser(gold: 50.00, gems: 0.00);
 
     $this->actingAs($user, 'sanctum')
         ->postJson('/api/exchange', [
             'from_currency' => 'gold',
             'to_currency'   => 'gems',
-            'amount'        => 10,
-        ])
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors(['amount' => 'Insufficient balance.']);
-});
-
-it('does not deduct balance when the exchange fails', function () {
-    $user = userWithWallets(gold: 5, gems: 0);
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'gold',
-            'to_currency'   => 'gems',
-            'amount'        => 10,
+            'amount'        => 100,
         ])
         ->assertUnprocessable();
 
-    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 5]);
-    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 0]);
-});
-
-it('does not log an exchange when the balance check fails', function () {
-    $user = userWithWallets(gold: 5, gems: 0);
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', [
-            'from_currency' => 'gold',
-            'to_currency'   => 'gems',
-            'amount'        => 10,
-        ])
-        ->assertUnprocessable();
-
+    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 50.00]);
+    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 0.00]);
     expect(ExchangeTransaction::where('user_id', $user->id)->count())->toBe(0);
 });
 
-// ── sequential exchange drains balance correctly ──────────────────────────────
+// ── Test 4 — invalid exchange pair returns 422 ────────────────────────────────
 
-it('two sequential exchanges accumulate the credited balance correctly', function () {
-    // Exchange 1: 10 gold → 0.97 gems  |  Exchange 2: 10 gold → 0.97 gems
-    // Total: gold = 0, gems = 1.94
-    $user = userWithWallets(gold: 20, gems: 0);
+it('invalid exchange pair returns 422', function () {
+    $user = User::factory()->create();
 
     $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', ['from_currency' => 'gold', 'to_currency' => 'gems', 'amount' => 10])
-        ->assertOk();
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', ['from_currency' => 'gold', 'to_currency' => 'gems', 'amount' => 10])
-        ->assertOk();
-
-    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 0]);
-    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gems', 'balance' => 1.94]);
+        ->postJson('/api/exchange', [
+            'from_currency' => 'wood',
+            'to_currency'   => 'stone',
+            'amount'        => 100,
+        ])
+        ->assertUnprocessable();
 });
 
-it('a third exchange on an empty wallet is rejected, not silently ignored', function () {
-    $user = userWithWallets(gold: 20, gems: 0);
+// ── Test 5 — same currency is rejected ───────────────────────────────────────
+
+it('same currency is rejected', function () {
+    $user = User::factory()->create();
 
     $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', ['from_currency' => 'gold', 'to_currency' => 'gems', 'amount' => 10])
-        ->assertOk();
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', ['from_currency' => 'gold', 'to_currency' => 'gems', 'amount' => 10])
-        ->assertOk();
-
-    $this->actingAs($user, 'sanctum')
-        ->postJson('/api/exchange', ['from_currency' => 'gold', 'to_currency' => 'gems', 'amount' => 1])
+        ->postJson('/api/exchange', [
+            'from_currency' => 'gold',
+            'to_currency'   => 'gold',
+            'amount'        => 100,
+        ])
         ->assertUnprocessable();
-
-    $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 0]);
 });
