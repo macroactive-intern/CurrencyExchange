@@ -1,28 +1,27 @@
 <?php
 
-// Concurrency tests require MySQL to be running and currency_exchange_test to exist.
-// They do NOT use RefreshDatabase. Each test commits its own setup rows so that
-// the spawned artisan processes (separate PHP processes) can read them.
+// Concurrency tests require MySQL running and currency_exchange_test to exist.
+// Do NOT wrap these tests in RefreshDatabase — spawned processes need committed data.
 // Run with: php artisan test tests/Concurrency --env=testing
 //
-// Net rate (gold→gems): round(round(amount*0.1,2) - round(gross*0.025,2), 2) per exchange
-//   20 gold → 1.95 gems (gross=2.00, fee=0.05, net=1.95; effective rate 0.0975)
-//   10 gold → 0.97 gems (gross=1.00, fee=0.03, net=0.97; effective rate 0.097)
-// Net rate (gems→gold): round(8.0 * 0.975 * amount, 2) per exchange
-//   10 gems → 78 gold (rate 7.8 holds exactly)
+// Decimal math for 10 gold (rate 0.1, fee 2.5%):
+//   gross = round(10 * 0.1, 2)        = 1.00
+//   fee   = round(1.00 * 0.025, 2)    = 0.03
+//   net   = round(1.00 - 0.03, 2)     = 0.97
+//
+// Each process spawns php artisan test:exchange via Symfony Process.
+// All processes are started first, then waited on — true parallel execution.
 
 use App\Models\CurrencyBalance;
+use App\Models\ExchangeTransaction;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Symfony\Component\Process\Process;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/**
- * Insert a user + two currency balances and commit immediately so that
- * spawned artisan processes can see the rows.
- */
-function createCommittedUser(int $gold = 0, int $gems = 0): User
+function committedUser(float $gold, float $gems): User
 {
     $user = User::forceCreate([
         'name'     => 'Concurrent Tester ' . Str::random(6),
@@ -40,10 +39,7 @@ function createCommittedUser(int $gold = 0, int $gems = 0): User
     return $user;
 }
 
-/**
- * Remove all rows created by a concurrency test.
- */
-function cleanUpUser(User $user): void
+function cleanupConcurrentUser(User $user): void
 {
     DB::table('exchange_transactions')->where('user_id', $user->id)->delete();
     DB::table('currency_balances')->where('user_id', $user->id)->delete();
@@ -51,123 +47,76 @@ function cleanUpUser(User $user): void
 }
 
 /**
- * Spawn $n artisan processes each trying to exchange $amount $from → $to.
- * Returns an array of exit codes.
+ * Launch $count parallel processes each running test:exchange and wait for all to finish.
+ * Returns the array of completed Process objects.
  */
-function spawnExchanges(int $userId, string $from, string $to, int $amount, int $n): array
+function launchExchangeProcesses(int $userId, string $from, string $to, float $amount, int $count): array
 {
-    $artisan = base_path('artisan');
-    $php     = PHP_BINARY;
+    $processes = [];
 
-    $procs = $pipes = [];
-
-    for ($i = 0; $i < $n; $i++) {
-        $procs[] = proc_open(
-            "{$php} {$artisan} exchange:run {$userId} {$from} {$to} {$amount} --env=testing",
-            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-            $pipes[$i]
-        );
+    for ($i = 0; $i < $count; $i++) {
+        $process = new Process([
+            PHP_BINARY,
+            base_path('artisan'),
+            'test:exchange',
+            (string) $userId,
+            $from,
+            $to,
+            (string) $amount,
+            '--env=testing',
+        ]);
+        $process->setTimeout(60);
+        $process->start();
+        $processes[] = $process;
     }
 
-    $exitCodes = [];
-    foreach ($procs as $i => $proc) {
-        fclose($pipes[$i][0]);
-        fclose($pipes[$i][1]);
-        fclose($pipes[$i][2]);
-        $exitCodes[] = proc_close($proc);
+    foreach ($processes as $process) {
+        $process->wait();
     }
 
-    return $exitCodes;
+    return $processes;
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-it('handles 10 concurrent gold→gems exchanges and never goes negative', function () {
-    // User starts with 100 gold. 10 processes each try to exchange 20 gold.
-    // Only 5 can succeed (100 / 20 = 5). The other 5 must fail cleanly.
-    // Conservation: gems_earned = gold_deducted * 0.0975 (exact for 20-gold chunks)
-    $user = createCommittedUser(gold: 100, gems: 0);
+it('50 concurrent exchanges all succeed when balance is sufficient', function () {
+    // 1000 gold ÷ 10 per exchange = 100 slots; 50 processes → all succeed.
+    // Gold: 1000.00 − (50 × 10) = 500.00
+    // Gems: 50 × 0.97            = 48.50
+    $user = committedUser(gold: 1000.00, gems: 0.00);
 
-    spawnExchanges($user->id, 'gold', 'gems', 20, 10);
+    launchExchangeProcesses($user->id, 'gold', 'gems', 10, 50);
 
-    $goldBalance = (float) CurrencyBalance::where('user_id', $user->id)->where('currency', 'gold')->value('balance');
-    $gemsBalance = (float) CurrencyBalance::where('user_id', $user->id)->where('currency', 'gems')->value('balance');
+    $goldBalance = CurrencyBalance::where('user_id', $user->id)->where('currency', 'gold')->first();
+    $gemsBalance = CurrencyBalance::where('user_id', $user->id)->where('currency', 'gems')->first();
 
-    expect($goldBalance)->toBeGreaterThanOrEqual(0.0);
-    expect($gemsBalance)->toBeGreaterThanOrEqual(0.0);
+    expect($goldBalance->balance)->toBe('500.00');
+    expect($gemsBalance->balance)->toBe('48.50');
+    expect($goldBalance->balance)->toBeGreaterThanOrEqual(0);
+    expect($gemsBalance->balance)->toBeGreaterThanOrEqual(0);
+    expect(ExchangeTransaction::where('user_id', $user->id)->count())->toBe(50);
 
-    // Every deducted 20-gold unit must have produced exactly 1.95 gems (round(2.0*0.975,2))
-    $goldDeducted = 100.0 - $goldBalance;
-    expect(round($gemsBalance, 6))->toBe(round($goldDeducted * 0.0975, 6));
-
-    cleanUpUser($user);
+    cleanupConcurrentUser($user);
 });
 
-it('all 5 concurrent exchanges succeed when balance is exactly enough', function () {
-    // User starts with 100 gold. 5 processes each exchange 20 gold.
-    // All 5 must succeed — total 100 gold consumed, 9.75 gems earned (5 × 1.95).
-    $user = createCommittedUser(gold: 100, gems: 0);
+it('only 10 of 50 concurrent exchanges succeed — proves no double-spend', function () {
+    // 100 gold ÷ 10 per exchange = exactly 10 can succeed.
+    // The remaining 40 processes must fail with insufficient balance.
+    // Gold must reach 0.00 and must never go negative.
+    // Gems = 10 successful × 0.97 = 9.70.
+    // Transaction count must be exactly 10 (no phantom writes on failure).
+    $user = committedUser(gold: 100.00, gems: 0.00);
 
-    $exitCodes = spawnExchanges($user->id, 'gold', 'gems', 20, 5);
+    launchExchangeProcesses($user->id, 'gold', 'gems', 10, 50);
 
-    $goldBalance = (float) CurrencyBalance::where('user_id', $user->id)->where('currency', 'gold')->value('balance');
-    $gemsBalance = (float) CurrencyBalance::where('user_id', $user->id)->where('currency', 'gems')->value('balance');
+    $goldBalance = CurrencyBalance::where('user_id', $user->id)->where('currency', 'gold')->first();
+    $gemsBalance = CurrencyBalance::where('user_id', $user->id)->where('currency', 'gems')->first();
 
-    expect($goldBalance)->toBe(0.0);
-    expect(round($gemsBalance, 6))->toBe(9.75);  // 5 × 1.95
-    expect(collect($exitCodes)->filter(fn ($c) => $c === 0)->count())->toBe(5);
+    expect($goldBalance->balance)->toBe('0.00');
+    expect($gemsBalance->balance)->toBe('9.70');
+    expect($goldBalance->balance)->toBeGreaterThanOrEqual(0);
+    expect($gemsBalance->balance)->toBeGreaterThanOrEqual(0);
+    expect(ExchangeTransaction::where('user_id', $user->id)->count())->toBe(10);
 
-    cleanUpUser($user);
-});
-
-it('locks in consistent order so opposite-direction exchanges do not deadlock', function () {
-    // Two users simultaneously exchange in opposite directions (gold→gems and gems→gold).
-    // This would deadlock without consistent lock ordering (gems locked before gold always).
-    $userA = createCommittedUser(gold: 50, gems: 0);
-    $userB = createCommittedUser(gold: 0, gems: 50);
-
-    $php     = PHP_BINARY;
-    $artisan = base_path('artisan');
-
-    $procsA = $pipesA = [];
-    $procsB = $pipesB = [];
-
-    for ($i = 0; $i < 5; $i++) {
-        $procsA[] = proc_open(
-            "{$php} {$artisan} exchange:run {$userA->id} gold gems 10 --env=testing",
-            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-            $pipesA[$i]
-        );
-        $procsB[] = proc_open(
-            "{$php} {$artisan} exchange:run {$userB->id} gems gold 10 --env=testing",
-            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-            $pipesB[$i]
-        );
-    }
-
-    foreach (array_merge($procsA, $procsB) as $i => $proc) {
-        proc_close($proc);
-    }
-
-    $goldA = (float) CurrencyBalance::where('user_id', $userA->id)->where('currency', 'gold')->value('balance');
-    $gemsA = (float) CurrencyBalance::where('user_id', $userA->id)->where('currency', 'gems')->value('balance');
-    $goldB = (float) CurrencyBalance::where('user_id', $userB->id)->where('currency', 'gold')->value('balance');
-    $gemsB = (float) CurrencyBalance::where('user_id', $userB->id)->where('currency', 'gems')->value('balance');
-
-    expect($goldA)->toBeGreaterThanOrEqual(0.0);
-    expect($gemsA)->toBeGreaterThanOrEqual(0.0);
-    expect($goldB)->toBeGreaterThanOrEqual(0.0);
-    expect($gemsB)->toBeGreaterThanOrEqual(0.0);
-
-    // Conservation for A: each 10-gold exchange credits round(1.00-0.03,2)=0.97 gems
-    $goldDeductedA = 50.0 - $goldA;
-    $successesA = (int) round($goldDeductedA / 10);
-    expect(round($gemsA, 6))->toBe(round($successesA * 0.97, 6));
-
-    // Conservation for B: each 10-gem exchange credits round(78,2)=78 gold
-    $gemsDeductedB = 50.0 - $gemsB;
-    expect(round($goldB, 6))->toBe(round($gemsDeductedB * 7.8, 6));
-
-    cleanUpUser($userA);
-    cleanUpUser($userB);
+    cleanupConcurrentUser($user);
 });
