@@ -24,16 +24,16 @@ use Symfony\Component\Process\Process;
 function committedUser(float $gold, float $gems): User
 {
     $user = User::forceCreate([
-        'name'     => 'Concurrent Tester ' . Str::random(6),
-        'email'    => 'concurrent+' . Str::random(8) . '@test.local',
+        'name' => 'Concurrent Tester '.Str::random(6),
+        'email' => 'concurrent+'.Str::random(8).'@test.local',
         'password' => bcrypt('password'),
     ]);
 
     CurrencyBalance::insert([
         ['user_id' => $user->id, 'currency' => 'gold', 'balance' => $gold,
-         'created_at' => now(), 'updated_at' => now()],
+            'created_at' => now(), 'updated_at' => now()],
         ['user_id' => $user->id, 'currency' => 'gems', 'balance' => $gems,
-         'created_at' => now(), 'updated_at' => now()],
+            'created_at' => now(), 'updated_at' => now()],
     ]);
 
     return $user;
@@ -98,8 +98,8 @@ it('50 concurrent exchanges all succeed when balance is sufficient', function ()
 
     $txns = ExchangeTransaction::where('user_id', $user->id);
     expect(round((float) $txns->sum('from_amount'), 2))->toBe(500.00);
-    expect(round((float) $txns->sum('to_amount'),   2))->toBe(48.50);
-    expect(round((float) $txns->sum('fee_amount'),  2))->toBe(1.50);
+    expect(round((float) $txns->sum('to_amount'), 2))->toBe(48.50);
+    expect(round((float) $txns->sum('fee_amount'), 2))->toBe(1.50);
 
     cleanupConcurrentUser($user);
 });
@@ -125,8 +125,8 @@ it('only 10 of 50 concurrent exchanges succeed — proves no double-spend', func
 
     $txns = ExchangeTransaction::where('user_id', $user->id);
     expect(round((float) $txns->sum('from_amount'), 2))->toBe(100.00);
-    expect(round((float) $txns->sum('to_amount'),   2))->toBe(9.70);
-    expect(round((float) $txns->sum('fee_amount'),  2))->toBe(0.30);
+    expect(round((float) $txns->sum('to_amount'), 2))->toBe(9.70);
+    expect(round((float) $txns->sum('fee_amount'), 2))->toBe(0.30);
 
     cleanupConcurrentUser($user);
 });

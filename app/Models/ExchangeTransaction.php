@@ -19,9 +19,9 @@ class ExchangeTransaction extends Model
 
     protected $casts = [
         'from_amount' => 'decimal:8',
-        'to_amount'   => 'decimal:8',
-        'fee_amount'  => 'decimal:8',
-        'rate'        => 'decimal:8',
+        'to_amount' => 'decimal:8',
+        'fee_amount' => 'decimal:8',
+        'rate' => 'decimal:8',
     ];
 
     public function user(): BelongsTo

@@ -29,7 +29,7 @@ class ExchangeRun extends Command
 
             return Command::SUCCESS;
         } catch (ValidationException|InvalidArgumentException $e) {
-            $this->line('fail: ' . $e->getMessage());
+            $this->line('fail: '.$e->getMessage());
 
             return Command::FAILURE;
         }

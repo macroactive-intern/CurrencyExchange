@@ -16,9 +16,9 @@ class WalletFactory extends Factory
     public function definition(): array
     {
         return [
-            'user_id'  => User::factory(),
+            'user_id' => User::factory(),
             'currency' => $this->faker->randomElement(['gold', 'gems']),
-            'balance'  => $this->faker->numberBetween(0, 1000),
+            'balance' => $this->faker->numberBetween(0, 1000),
         ];
     }
 

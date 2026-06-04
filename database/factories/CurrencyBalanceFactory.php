@@ -16,9 +16,9 @@ class CurrencyBalanceFactory extends Factory
     public function definition(): array
     {
         return [
-            'user_id'  => User::factory(),
+            'user_id' => User::factory(),
             'currency' => 'gold',
-            'balance'  => 1000.00,
+            'balance' => 1000.00,
         ];
     }
 

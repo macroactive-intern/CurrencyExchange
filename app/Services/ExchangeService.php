@@ -18,6 +18,8 @@ class ExchangeService
         $amount = round($amount, 2);
 
         return DB::transaction(function () use ($user, $fromCurrency, $toCurrency, $amount) {
+            // Alphabetical lock order ensures concurrent transactions always
+            // acquire row locks in the same sequence, preventing deadlocks.
             $balances = CurrencyBalance::where('user_id', $user->id)
                 ->whereIn('currency', [$fromCurrency, $toCurrency])
                 ->orderBy('currency')
@@ -42,19 +44,19 @@ class ExchangeService
             $toBalance->increment('balance', $credited);
 
             ExchangeTransaction::create([
-                'user_id'       => $user->id,
+                'user_id' => $user->id,
                 'from_currency' => $fromCurrency,
-                'to_currency'   => $toCurrency,
-                'from_amount'   => $amount,
-                'to_amount'     => $credited,
-                'fee_amount'    => $fee,
-                'rate'          => config("exchange.rates.{$fromCurrency}_to_{$toCurrency}"),
+                'to_currency' => $toCurrency,
+                'from_amount' => $amount,
+                'to_amount' => $credited,
+                'fee_amount' => $fee,
+                'rate' => config("exchange.rates.{$fromCurrency}_to_{$toCurrency}"),
             ]);
 
             return [
                 'deducted' => $amount,
                 'credited' => $credited,
-                'fee'      => $fee,
+                'fee' => $fee,
             ];
         }, attempts: 3);
     }
@@ -73,16 +75,16 @@ class ExchangeService
     public function breakdown(string $from, string $to, float $amount): array
     {
         $rateKey = "{$from}_to_{$to}";
-        $rate    = config("exchange.rates.{$rateKey}")
+        $rate = config("exchange.rates.{$rateKey}")
             ?? throw new InvalidArgumentException(
                 "No exchange rate configured for {$from} → {$to}."
             );
 
-        $amount     = round($amount, 2);
-        $gross      = round($amount * $rate, 2);
+        $amount = round($amount, 2);
+        $gross = round($amount * $rate, 2);
         $feePercent = config('exchange.fee_percent', 0);
-        $fee        = round($gross * ($feePercent / 100), 2);
-        $net        = round($gross - $fee, 2);
+        $fee = round($gross * ($feePercent / 100), 2);
+        $net = round($gross - $fee, 2);
 
         return ['gross' => $gross, 'fee' => $fee, 'net' => $net];
     }
@@ -104,11 +106,11 @@ class ExchangeService
         );
 
         if (! in_array($from, $valid, true) || ! in_array($to, $valid, true)) {
-            throw new InvalidArgumentException("Unknown currency. Allowed: " . implode(', ', $valid) . ".");
+            throw new InvalidArgumentException('Unknown currency. Allowed: '.implode(', ', $valid).'.');
         }
 
         if ($from === $to) {
-            throw new InvalidArgumentException("Cannot exchange a currency for itself.");
+            throw new InvalidArgumentException('Cannot exchange a currency for itself.');
         }
     }
 }

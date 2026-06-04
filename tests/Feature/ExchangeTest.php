@@ -27,14 +27,14 @@ it('exchange deducts and credits correctly', function () {
     $this->actingAs($user, 'sanctum')
         ->postJson('/api/exchange', [
             'from_currency' => 'gold',
-            'to_currency'   => 'gems',
-            'amount'        => 100,
+            'to_currency' => 'gems',
+            'amount' => 100,
         ])
         ->assertOk()
         ->assertJson([
             'deducted' => 100,
             'credited' => 9.75,
-            'fee'      => 0.25,
+            'fee' => 0.25,
         ]);
 
     $this->assertDatabaseHas('currency_balances', ['user_id' => $user->id, 'currency' => 'gold', 'balance' => 900.00]);
@@ -54,8 +54,8 @@ it('fee is applied correctly', function () {
     $data = $this->actingAs($user, 'sanctum')
         ->postJson('/api/exchange', [
             'from_currency' => 'gold',
-            'to_currency'   => 'gems',
-            'amount'        => 100,
+            'to_currency' => 'gems',
+            'amount' => 100,
         ])
         ->assertOk()
         ->json();
@@ -73,8 +73,8 @@ it('insufficient balance returns 422', function () {
     $this->actingAs($user, 'sanctum')
         ->postJson('/api/exchange', [
             'from_currency' => 'gold',
-            'to_currency'   => 'gems',
-            'amount'        => 100,
+            'to_currency' => 'gems',
+            'amount' => 100,
         ])
         ->assertUnprocessable();
 
@@ -91,8 +91,8 @@ it('invalid exchange pair returns 422', function () {
     $this->actingAs($user, 'sanctum')
         ->postJson('/api/exchange', [
             'from_currency' => 'wood',
-            'to_currency'   => 'stone',
-            'amount'        => 100,
+            'to_currency' => 'stone',
+            'amount' => 100,
         ])
         ->assertUnprocessable();
 });
@@ -105,8 +105,8 @@ it('same currency is rejected', function () {
     $this->actingAs($user, 'sanctum')
         ->postJson('/api/exchange', [
             'from_currency' => 'gold',
-            'to_currency'   => 'gold',
-            'amount'        => 100,
+            'to_currency' => 'gold',
+            'amount' => 100,
         ])
         ->assertUnprocessable();
 });

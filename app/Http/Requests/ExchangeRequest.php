@@ -16,8 +16,8 @@ class ExchangeRequest extends FormRequest
     {
         return [
             'from_currency' => ['required', 'string', 'max:50'],
-            'to_currency'   => ['required', 'string', 'max:50', 'different:from_currency'],
-            'amount'        => ['required', 'numeric', 'min:0.01'],
+            'to_currency' => ['required', 'string', 'max:50', 'different:from_currency'],
+            'amount' => ['required', 'numeric', 'min:0.01'],
         ];
     }
 
